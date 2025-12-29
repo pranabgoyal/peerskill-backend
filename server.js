@@ -27,8 +27,18 @@ app.post("/signup", async (req, res) => {
 
 app.post("/login", async (req, res) => {
   const user = await User.findOne(req.body)
-  if(user) res.send("Login OK")
+  if (user) res.send("Login OK")
   else res.send("Invalid login")
+})
+
+/* ✅ ADD THIS ROUTE — THIS IS WHAT WAS MISSING */
+app.get("/admin/users", async (req, res) => {
+  try {
+    const users = await User.find({})
+    res.json(users)
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch users" })
+  }
 })
 
 app.listen(5000, () => {
