@@ -20,9 +20,14 @@ const UserMetadataSchema = new mongoose.Schema({
   email: { type: String, unique: true },
   contact: String,
   password: String,
+  studyYear: String,
+  branch: String,
   teach: [String],
   learn: [String],
-  skillPoints: { type: Number, default: 0 }
+  skillPoints: { type: Number, default: 0 },
+  rating: { type: Number, default: 0 },
+  reviews: { type: Number, default: 0 },
+  avatar: { type: String, default: 'profile_pictures/bot.png' }
 })
 const User = mongoose.model("UserMetadata", UserMetadataSchema)
 
@@ -53,7 +58,7 @@ app.get("/", (req, res) => {
 
 app.post("/signup", async (req, res) => {
   try {
-    const { name, email, contact, password, teach, learn } = req.body
+    const { name, email, contact, password, teach, learn, studyYear, branch, avatar } = req.body
 
     // Check existing
     if (await User.findOne({ email })) {
@@ -61,7 +66,11 @@ app.post("/signup", async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10)
-    await User.create({ name, email, contact, password: hashedPassword, teach, learn })
+    await User.create({
+      name, email, contact, password: hashedPassword,
+      teach, learn, studyYear, branch,
+      avatar: avatar || 'profile_pictures/bot.png'
+    })
 
     res.send("Signup successful")
   } catch (err) {
@@ -110,6 +119,22 @@ app.post("/me", async (req, res) => {
   }
 })
 
+app.post("/update-profile", async (req, res) => {
+  try {
+    const { email, name, contact, studyYear, branch, teach, learn, avatar } = req.body
+
+    // Updates
+    const updateData = { name, contact, studyYear, branch, teach, learn }
+    if (avatar) updateData.avatar = avatar
+
+    await User.findOneAndUpdate({ email }, updateData)
+    res.json({ status: "ok" })
+  } catch (err) {
+    console.error("Update Error:", err)
+    res.status(500).json({ error: "Failed to update profile" })
+  }
+})
+
 // Smart Peer Recommendations
 app.post("/recommendations", async (req, res) => {
   try {
@@ -124,7 +149,7 @@ app.post("/recommendations", async (req, res) => {
     const matches = await User.find({
       email: { $ne: email },
       teach: { $in: learnSkills }
-    }).select("name teach contact email skillPoints")
+    }).select("name teach contact email skillPoints avatar")
 
     res.json(matches)
   } catch (err) {
@@ -139,7 +164,7 @@ app.post("/peers/random", async (req, res) => {
     const { email } = req.body
 
     // Get all users except self
-    const allUsers = await User.find({ email: { $ne: email } }).select("name teach learn skillPoints email studyYear branch")
+    const allUsers = await User.find({ email: { $ne: email } }).select("name teach learn skillPoints email studyYear branch avatar")
 
     // Shuffle array (Fisher-Yates or simple random sort)
     const shuffled = allUsers.sort(() => 0.5 - Math.random())
@@ -171,11 +196,40 @@ app.post("/request-skill", async (req, res) => {
       skill
     })
 
-    console.log("Token saved successfully")
     res.json({ status: "ok" })
   } catch (err) {
     console.error("Token Request Error:", err)
     res.status(500).json({ status: "error" })
+  }
+})
+
+app.post("/rate-peer", async (req, res) => {
+  try {
+    const { peerEmail, rating } = req.body
+    const user = await User.findOne({ email: peerEmail })
+    if (!user) return res.status(404).json({ error: "User not found" })
+
+    // Calculate new average
+    const currentRating = user.rating || 0
+    const currentReviews = user.reviews || 0
+
+    // Weighted Average: ((old * N) + new) / (N + 1)
+    const newRating = ((currentRating * currentReviews) + parseFloat(rating)) / (currentReviews + 1)
+
+    // Bonus points for getting rated
+    const bonus = 10
+
+    user.rating = newRating.toFixed(1)
+    user.reviews = currentReviews + 1
+    user.skillPoints = (user.skillPoints || 0) + bonus
+
+    await user.save()
+
+    console.log(`Rated ${peerEmail}: New Avg ${user.rating}, Points ${user.skillPoints}`)
+    res.json({ status: "ok", newPoints: user.skillPoints })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: "Rating failed" })
   }
 })
 
@@ -190,11 +244,22 @@ app.post("/schedule-session", async (req, res) => {
 
     await Session.create({ scheduler, peer, skill, dateTime, link })
 
-    console.log(`Session Scheduled! Link: ${link}`)
     res.json({ status: "ok", link })
   } catch (err) {
     console.error("Schedule Error:", err)
     res.status(500).json({ error: "Failed to schedule" })
+  }
+})
+
+app.post("/my-sessions", async (req, res) => {
+  try {
+    const { email } = req.body
+    const sessions = await Session.find({
+      $or: [{ scheduler: email }, { peer: email }]
+    }).sort({ dateTime: 1 }) // Sort by date/time (string sort is basic but works for ISO/consistent formats)
+    res.json(sessions)
+  } catch (err) {
+    res.status(500).json([])
   }
 })
 
@@ -227,13 +292,23 @@ app.get("/admin/sessions", async (req, res) => {
   }
 })
 
-app.post("/admin/update-points", async (req, res) => {
+app.get("/peers/leaderboard", async (req, res) => {
   try {
-    const { email, points } = req.body
-    await User.findOneAndUpdate({ email }, { skillPoints: parseInt(points) })
+    // Top 5 users by points
+    const leaders = await User.find().sort({ skillPoints: -1 }).limit(5).select("name skillPoints studyYear branch")
+    res.json(leaders)
+  } catch (err) {
+    res.status(500).json([])
+  }
+})
+
+app.delete("/admin/user", async (req, res) => {
+  try {
+    const { email } = req.body
+    await User.deleteOne({ email })
     res.json({ status: "ok" })
   } catch (err) {
-    res.status(500).json({ error: "Failed update" })
+    res.status(500).json({ error: "Failed delete" })
   }
 })
 
