@@ -182,11 +182,9 @@ app.post("/peers/random", async (req, res) => {
 app.post("/request-skill", async (req, res) => {
   try {
     const { email, skill } = req.body
-    console.log(`Received Token Request from: ${email} for skill: ${skill}`)
 
     const user = await User.findOne({ email })
     if (!user) {
-      console.log("Token Request failed: User not found")
       return res.status(404).json({ error: "User not found" })
     }
 
@@ -225,7 +223,6 @@ app.post("/rate-peer", async (req, res) => {
 
     await user.save()
 
-    console.log(`Rated ${peerEmail}: New Avg ${user.rating}, Points ${user.skillPoints}`)
     res.json({ status: "ok", newPoints: user.skillPoints })
   } catch (err) {
     console.error(err)
@@ -236,11 +233,11 @@ app.post("/rate-peer", async (req, res) => {
 app.post("/schedule-session", async (req, res) => {
   try {
     const { scheduler, peer, skill, dateTime } = req.body
-    console.log(`Scheduling Session: ${scheduler} with ${peer} at ${dateTime}`)
 
-    // Generate mock meeting link
-    const rand = () => Math.random().toString(36).substring(2, 5)
-    const link = `https://meet.google.com/${rand()}-${rand()}-${rand()}`
+    // Generate reliable Jitsi Meet link (Practically workable)
+    const rand = () => Math.random().toString(36).substring(2, 6)
+    // Jitsi allows creating rooms on the fly with a unique URL
+    const link = `https://meet.jit.si/PeerSkill-${rand()}-${rand()}-${Date.now()}`
 
     await Session.create({ scheduler, peer, skill, dateTime, link })
 
