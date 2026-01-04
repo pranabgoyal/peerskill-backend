@@ -133,6 +133,25 @@ app.post("/recommendations", async (req, res) => {
   }
 })
 
+// Get Random Peers (for "Available Peers" section)
+app.post("/peers/random", async (req, res) => {
+  try {
+    const { email } = req.body
+
+    // Get all users except self
+    const allUsers = await User.find({ email: { $ne: email } }).select("name teach learn skillPoints email studyYear branch")
+
+    // Shuffle array (Fisher-Yates or simple random sort)
+    const shuffled = allUsers.sort(() => 0.5 - Math.random())
+
+    // Return top 5
+    res.json(shuffled.slice(0, 5))
+  } catch (err) {
+    console.error("Random Peers Error:", err)
+    res.status(500).json([])
+  }
+})
+
 // --- FEATURES ---
 
 app.post("/request-skill", async (req, res) => {
