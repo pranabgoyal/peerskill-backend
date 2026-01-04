@@ -79,8 +79,10 @@ app.post("/login", async (req, res) => {
       return res.json({ status: "ok", role: "admin", name: "Admin" })
     }
 
-    const user = await User.findOne({ email })
+    // Use regex for case-insensitive lookup
+    const user = await User.findOne({ email: { $regex: new RegExp(`^${email}$`, 'i') } })
     if (!user) {
+      console.log("User not found (case-insensitive search)")
       return res.status(401).send("Invalid email or password")
     }
 
