@@ -102,9 +102,9 @@ app.post("/me", async (req, res) => {
   try {
     const user = await User.findOne({ email: req.body.email }).select("-password")
     if (user) res.json(user)
-    else res.status(404).send("User not found")
+    else res.status(404).json({ error: "User not found" })
   } catch (err) {
-    res.status(500).send("Server error")
+    res.status(500).json({ error: "Server error" })
   }
 })
 
@@ -136,14 +136,24 @@ app.post("/recommendations", async (req, res) => {
 app.post("/request-skill", async (req, res) => {
   try {
     const { email, skill } = req.body
+    console.log(`Received Token Request from: ${email} for skill: ${skill}`)
+
     const user = await User.findOne({ email })
+    if (!user) {
+      console.log("Token Request failed: User not found")
+      return res.status(404).json({ error: "User not found" })
+    }
+
     await SkillRequest.create({
       email,
-      name: user ? user.name : "Unknown",
+      name: user.name,
       skill
     })
+
+    console.log("Token saved successfully")
     res.json({ status: "ok" })
   } catch (err) {
+    console.error("Token Request Error:", err)
     res.status(500).json({ status: "error" })
   }
 })
