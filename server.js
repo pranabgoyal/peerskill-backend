@@ -161,14 +161,18 @@ app.post("/request-skill", async (req, res) => {
 app.post("/schedule-session", async (req, res) => {
   try {
     const { scheduler, peer, skill, dateTime } = req.body
+    console.log(`Scheduling Session: ${scheduler} with ${peer} at ${dateTime}`)
 
     // Generate mock meeting link
     const rand = () => Math.random().toString(36).substring(2, 5)
     const link = `https://meet.google.com/${rand()}-${rand()}-${rand()}`
 
     await Session.create({ scheduler, peer, skill, dateTime, link })
+
+    console.log(`Session Scheduled! Link: ${link}`)
     res.json({ status: "ok", link })
   } catch (err) {
+    console.error("Schedule Error:", err)
     res.status(500).json({ error: "Failed to schedule" })
   }
 })
