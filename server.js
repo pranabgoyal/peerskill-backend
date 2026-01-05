@@ -11,7 +11,10 @@ app.use(express.json())
 // Database Connection
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("DB Connected"))
-  .catch(err => console.log("DB Error", err))
+  .catch(err => console.error("DB Error", err))
+
+const ADMIN_EMAIL = "admin@peerskill.com"
+const ADMIN_PASS = "admin123"
 
 // ================= SCHEMA DEFINITIONS =================
 
@@ -39,19 +42,27 @@ const SkillRequest = mongoose.model("SkillRequest", {
   date: { type: Date, default: Date.now }
 })
 
-const Session = mongoose.model("Session", {
+const sessionSchema = new mongoose.Schema({
   scheduler: String,
   peer: String,
   skill: String,
-  dateTime: String,
-  link: String,
-  created: { type: Date, default: Date.now }
+  dateTime: String, // "YYYY-MM-DD at HH:MM"
+  link: String
 })
+const Session = mongoose.model("Session", sessionSchema)
+
+const notificationSchema = new mongoose.Schema({
+  recipient: String, // email
+  message: String,
+  read: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+})
+const Notification = mongoose.model("Notification", notificationSchema)
 
 // ================= API ROUTES =================
 
 app.get("/", (req, res) => {
-  res.send("PeerSkill Backend Running v3.0")
+  res.send("PeerSkill V3 Backend Running")
 })
 
 // --- AUTHENTICATION ---
@@ -83,8 +94,8 @@ app.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body
 
-    // HARDCODED ADMIN LOGIN
-    if (email === "admin@peerskill.com" && password === "admin123") {
+    // ADMIN LOGIN
+    if (email === ADMIN_EMAIL && password === ADMIN_PASS) {
       return res.json({ status: "ok", role: "admin", name: "Admin" })
     }
 
@@ -166,13 +177,39 @@ app.post("/peers/random", async (req, res) => {
     // Get all users except self
     const allUsers = await User.find({ email: { $ne: email } }).select("name teach learn skillPoints email studyYear branch avatar")
 
-    // Shuffle array (Fisher-Yates or simple random sort)
-    const shuffled = allUsers.sort(() => 0.5 - Math.random())
 
-    // Return top 5
+
+    // Return top 5 random
+    // Using simple sort for small dataset. For large datasets, use aggregate $sample
+    const shuffled = allUsers.sort(() => 0.5 - Math.random())
     res.json(shuffled.slice(0, 5))
   } catch (err) {
     console.error("Random Peers Error:", err)
+    res.status(500).json([])
+  }
+})
+
+// Search Peers
+app.post("/peers/search", async (req, res) => {
+  try {
+    const { email, query } = req.body
+    if (!query) return res.json([])
+
+    const regex = new RegExp(query, 'i')
+
+    const matches = await User.find({
+      email: { $ne: email },
+      $or: [
+        { name: regex },
+        { teach: { $in: [regex] } },
+        { branch: regex },
+        { studyYear: regex }
+      ]
+    }).select("name teach learn skillPoints email studyYear branch avatar")
+
+    res.json(matches)
+  } catch (err) {
+    console.error("Search Error:", err)
     res.status(500).json([])
   }
 })
@@ -253,9 +290,10 @@ app.post("/my-sessions", async (req, res) => {
     const { email } = req.body
     const sessions = await Session.find({
       $or: [{ scheduler: email }, { peer: email }]
-    }).sort({ dateTime: 1 }) // Sort by date/time (string sort is basic but works for ISO/consistent formats)
+    }).sort({ dateTime: 1 }) // ISO-like format string sort works for "YYYY-MM-DD at HH:MM"
     res.json(sessions)
   } catch (err) {
+    console.error("My Sessions Error:", err)
     res.status(500).json([])
   }
 })
