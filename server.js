@@ -143,9 +143,42 @@ app.post("/login", async (req, res) => {
       return res.status(401).send("Invalid email or password")
     }
   } catch (err) {
-    console.error("Login Error:", err)
-    res.status(500).send("Login error")
+    res.status(500).send("Error")
   }
+})
+
+// --- PEER RATING SYSTEM ---
+app.post("/rate-peer", authenticateToken, async (req, res) => {
+  try {
+    const { targetEmail, rating } = req.body
+    const raterEmail = req.user.email
+
+    if (targetEmail === raterEmail) return res.status(400).json({ status: "error", error: "Cannot rate yourself" })
+    if (rating < 1 || rating > 5) return res.status(400).json({ status: "error", error: "Invalid rating" })
+
+    // Give points: Base 10 points per rating for simplicity
+    // In real app we would check if session exists
+    const user = await User.findOne({ email: targetEmail })
+    if (!user) return res.status(404).json({ error: "User not found" })
+
+    user.skillPoints = (user.skillPoints || 0) + 10
+    await user.save()
+
+    // Notify
+    await Notification.create({
+      recipient: targetEmail,
+      message: `You received a ${rating}-star rating! +10 Skill Points.`
+    })
+
+    res.json({ status: "ok" })
+  } catch (e) {
+    res.status(500).json({ status: "error", error: "Server Error" })
+  }
+})
+  } catch (err) {
+  console.error("Login Error:", err)
+  res.status(500).send("Login error")
+}
 })
 
 // --- DASHBOARD & USER DATA (Protected) ---
