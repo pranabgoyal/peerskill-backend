@@ -175,12 +175,6 @@ app.post("/rate-peer", authenticateToken, async (req, res) => {
     res.status(500).json({ status: "error", error: "Server Error" })
   }
 })
-  } catch (err) {
-  console.error("Login Error:", err)
-  res.status(500).send("Login error")
-}
-})
-
 // --- DASHBOARD & USER DATA (Protected) ---
 
 app.post("/me", authenticateToken, async (req, res) => {
