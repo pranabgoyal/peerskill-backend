@@ -288,26 +288,46 @@ app.post("/request-skill", authenticateToken, async (req, res) => {
   }
 })
 
+// Merged Rate Peer Logic
 app.post("/rate-peer", authenticateToken, async (req, res) => {
-  // Anyone with a token can rate for now (logic improvement: verify session existed)
   try {
-    const { peerEmail, rating } = req.body
-    const user = await User.findOne({ email: peerEmail })
+    // Determine which field name is being sent. Frontend script uses 'targetEmail', duplicate route used 'peerEmail'
+    // We will standardize on 'targetEmail' but check both to be safe.
+    const targetEmail = req.body.targetEmail || req.body.peerEmail
+    const rating = parseFloat(req.body.rating)
+    const raterEmail = req.user.email // From Token
+
+    if (!targetEmail) return res.status(400).json({ error: "Target email required" })
+    if (targetEmail === raterEmail) return res.status(400).json({ error: "Cannot rate yourself" })
+    if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: "Invalid rating" })
+
+    const user = await User.findOne({ email: targetEmail })
     if (!user) return res.status(404).json({ error: "User not found" })
 
+    // 1. Update Average Rating
     const currentRating = user.rating || 0
     const currentReviews = user.reviews || 0
-    const newRating = ((currentRating * currentReviews) + parseFloat(rating)) / (currentReviews + 1)
-    const bonus = 10
+    // New Weighted Average
+    const newRating = ((currentRating * currentReviews) + rating) / (currentReviews + 1)
 
-    user.rating = newRating.toFixed(1)
+    user.rating = newRating
     user.reviews = currentReviews + 1
-    user.skillPoints = (user.skillPoints || 0) + bonus
+
+    // 2. Award Points (Incentive)
+    user.skillPoints = (user.skillPoints || 0) + 10
 
     await user.save()
-    res.json({ status: "ok", newPoints: user.skillPoints })
+
+    // 3. Notify
+    await Notification.create({
+      recipient: targetEmail,
+      message: `You received a ${rating}-star rating from a peer! +10 Skill Points.`
+    })
+
+    res.json({ status: "ok", newPoints: user.skillPoints, newRating: user.rating })
   } catch (err) {
-    res.status(500).json({ error: "Rating failed" })
+    console.error("Rating Error:", err)
+    res.status(500).json({ error: "Server Error" })
   }
 })
 
