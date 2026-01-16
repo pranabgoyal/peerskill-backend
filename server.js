@@ -226,7 +226,7 @@ app.post("/recommendations", authenticateToken, async (req, res) => {
     const matches = await User.find({
       email: { $ne: email },
       teach: { $in: learnSkills }
-    }).select("name teach contact email skillPoints avatar")
+    }).select("name teach contact email skillPoints avatar studyYear branch")
 
     res.json(matches)
   } catch (err) {
