@@ -4,6 +4,9 @@ const mongoose = require('mongoose')
 const cors = require('cors')
 const bcrypt = require('bcrypt')
 
+const jwt = require('jsonwebtoken')
+const JWT_SECRET = process.env.JWT_SECRET || "peerskill_secret_key_123"
+
 const app = express()
 app.use(cors())
 app.use(express.json())
@@ -59,6 +62,30 @@ const notificationSchema = new mongoose.Schema({
 })
 const Notification = mongoose.model("Notification", notificationSchema)
 
+// ================= MIDDLEWARE =================
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization']
+  const token = authHeader && authHeader.split(' ')[1] // Bearer TOKEN
+
+  if (!token) return res.sendStatus(401)
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403)
+    req.user = user // { email, role }
+    next()
+  })
+}
+
+const authorizeAdmin = (req, res, next) => {
+  authenticateToken(req, res, () => {
+    if (req.user.role === 'admin') {
+      next()
+    } else {
+      res.sendStatus(403)
+    }
+  })
+}
+
 // ================= API ROUTES =================
 
 app.get("/", (req, res) => {
@@ -83,6 +110,8 @@ app.post("/signup", async (req, res) => {
       avatar: avatar || 'profile_pictures/bot.png'
     })
 
+    // Auto-login after signup? For now just success.
+    // Ideally return token here too, but let's stick to flow: Signup -> Login
     res.send("Signup successful")
   } catch (err) {
     console.error("Signup Error:", err)
@@ -96,19 +125,20 @@ app.post("/login", async (req, res) => {
 
     // ADMIN LOGIN
     if (email === ADMIN_EMAIL && password === ADMIN_PASS) {
-      return res.json({ status: "ok", role: "admin", name: "Admin" })
+      const token = jwt.sign({ email, role: 'admin' }, JWT_SECRET, { expiresIn: '24h' })
+      return res.json({ status: "ok", role: "admin", name: "Admin", token })
     }
 
     // Use regex for case-insensitive lookup
     const user = await User.findOne({ email: { $regex: new RegExp(`^${email}$`, 'i') } })
     if (!user) {
-      console.log("User not found (case-insensitive search)")
       return res.status(401).send("Invalid email or password")
     }
 
     const match = await bcrypt.compare(password, user.password)
     if (match) {
-      return res.json({ status: "ok", role: "student", name: user.name, email: user.email })
+      const token = jwt.sign({ email: user.email, role: 'student' }, JWT_SECRET, { expiresIn: '24h' })
+      return res.json({ status: "ok", role: "student", name: user.name, email: user.email, token })
     } else {
       return res.status(401).send("Invalid email or password")
     }
@@ -118,10 +148,16 @@ app.post("/login", async (req, res) => {
   }
 })
 
-// --- DASHBOARD & USER DATA ---
+// --- DASHBOARD & USER DATA (Protected) ---
 
-app.post("/me", async (req, res) => {
+app.post("/me", authenticateToken, async (req, res) => {
   try {
+    // Rely on token, but also check if body matches (optional, but good)
+    // Actually, stick to body.email for logic, but verify against req.user.email
+    if (req.body.email !== req.user.email && req.user.role !== 'admin') {
+      return res.status(403).json({ error: "Unauthorized access to profile" })
+    }
+
     const user = await User.findOne({ email: req.body.email }).select("-password")
     if (user) res.json(user)
     else res.status(404).json({ error: "User not found" })
@@ -130,9 +166,14 @@ app.post("/me", async (req, res) => {
   }
 })
 
-app.post("/update-profile", async (req, res) => {
+app.post("/update-profile", authenticateToken, async (req, res) => {
   try {
     const { email, name, contact, studyYear, branch, teach, learn, avatar } = req.body
+
+    // SECURITY CHECK: User can only update their own profile
+    if (email !== req.user.email && req.user.role !== 'admin') {
+      return res.status(403).json({ error: "Unauthorized update" })
+    }
 
     // Updates
     const updateData = { name, contact, studyYear, branch, teach, learn }
@@ -146,17 +187,15 @@ app.post("/update-profile", async (req, res) => {
   }
 })
 
-// Smart Peer Recommendations
-app.post("/recommendations", async (req, res) => {
+// Smart Peer Recommendations (Protected)
+app.post("/recommendations", authenticateToken, async (req, res) => {
   try {
     const { email } = req.body
     const currentUser = await User.findOne({ email })
     if (!currentUser || !currentUser.learn) return res.json([])
 
-    // Normalize skills to regex for flexible matching
     const learnSkills = currentUser.learn.map(s => new RegExp(s, 'i'))
 
-    // Find users who teach what I want to learn
     const matches = await User.find({
       email: { $ne: email },
       teach: { $in: learnSkills }
@@ -164,33 +203,24 @@ app.post("/recommendations", async (req, res) => {
 
     res.json(matches)
   } catch (err) {
-    console.error("Reco Error:", err)
     res.status(500).json([])
   }
 })
 
-// Get Random Peers (for "Available Peers" section)
-app.post("/peers/random", async (req, res) => {
+// Get Random Peers (Protected)
+app.post("/peers/random", authenticateToken, async (req, res) => {
   try {
     const { email } = req.body
-
-    // Get all users except self
     const allUsers = await User.find({ email: { $ne: email } }).select("name teach learn skillPoints email studyYear branch avatar")
-
-
-
-    // Return top 5 random
-    // Using simple sort for small dataset. For large datasets, use aggregate $sample
     const shuffled = allUsers.sort(() => 0.5 - Math.random())
     res.json(shuffled.slice(0, 5))
   } catch (err) {
-    console.error("Random Peers Error:", err)
     res.status(500).json([])
   }
 })
 
-// Search Peers
-app.post("/peers/search", async (req, res) => {
+// Search Peers (Protected)
+app.post("/peers/search", authenticateToken, async (req, res) => {
   try {
     const { email, query } = req.body
     if (!query) return res.json([])
@@ -209,49 +239,38 @@ app.post("/peers/search", async (req, res) => {
 
     res.json(matches)
   } catch (err) {
-    console.error("Search Error:", err)
     res.status(500).json([])
   }
 })
 
-// --- FEATURES ---
+// --- FEATURES (Protected) ---
 
-app.post("/request-skill", async (req, res) => {
+app.post("/request-skill", authenticateToken, async (req, res) => {
   try {
     const { email, skill } = req.body
+    // Check if sending email matches token
+    if (email !== req.user.email) return res.status(403).json({ status: "error" })
 
     const user = await User.findOne({ email })
-    if (!user) {
-      return res.status(404).json({ error: "User not found" })
-    }
+    if (!user) return res.status(404).json({ error: "User not found" })
 
-    await SkillRequest.create({
-      email,
-      name: user.name,
-      skill
-    })
-
+    await SkillRequest.create({ email, name: user.name, skill })
     res.json({ status: "ok" })
   } catch (err) {
-    console.error("Token Request Error:", err)
     res.status(500).json({ status: "error" })
   }
 })
 
-app.post("/rate-peer", async (req, res) => {
+app.post("/rate-peer", authenticateToken, async (req, res) => {
+  // Anyone with a token can rate for now (logic improvement: verify session existed)
   try {
     const { peerEmail, rating } = req.body
     const user = await User.findOne({ email: peerEmail })
     if (!user) return res.status(404).json({ error: "User not found" })
 
-    // Calculate new average
     const currentRating = user.rating || 0
     const currentReviews = user.reviews || 0
-
-    // Weighted Average: ((old * N) + new) / (N + 1)
     const newRating = ((currentRating * currentReviews) + parseFloat(rating)) / (currentReviews + 1)
-
-    // Bonus points for getting rated
     const bonus = 10
 
     user.rating = newRating.toFixed(1)
@@ -259,48 +278,45 @@ app.post("/rate-peer", async (req, res) => {
     user.skillPoints = (user.skillPoints || 0) + bonus
 
     await user.save()
-
     res.json({ status: "ok", newPoints: user.skillPoints })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: "Rating failed" })
   }
 })
 
-app.post("/schedule-session", async (req, res) => {
+app.post("/schedule-session", authenticateToken, async (req, res) => {
   try {
     const { scheduler, peer, skill, dateTime } = req.body
 
-    // Generate reliable Jitsi Meet link (Practically workable)
+    if (scheduler !== req.user.email) return res.status(403).json({ error: "Identity Mismatch" })
+
     const rand = () => Math.random().toString(36).substring(2, 6)
-    // Jitsi allows creating rooms on the fly with a unique URL
     const link = `https://meet.jit.si/PeerSkill-${rand()}-${rand()}-${Date.now()}`
 
     await Session.create({ scheduler, peer, skill, dateTime, link })
-
     res.json({ status: "ok", link })
   } catch (err) {
-    console.error("Schedule Error:", err)
     res.status(500).json({ error: "Failed to schedule" })
   }
 })
 
-app.post("/my-sessions", async (req, res) => {
+app.post("/my-sessions", authenticateToken, async (req, res) => {
   try {
     const { email } = req.body
+    if (email !== req.user.email) return res.status(403).json([])
+
     const sessions = await Session.find({
       $or: [{ scheduler: email }, { peer: email }]
-    }).sort({ dateTime: 1 }) // ISO-like format string sort works for "YYYY-MM-DD at HH:MM"
+    }).sort({ dateTime: 1 })
     res.json(sessions)
   } catch (err) {
-    console.error("My Sessions Error:", err)
     res.status(500).json([])
   }
 })
 
-// --- ADMIN ROUTES ---
+// --- ADMIN ROUTES (Protected by authorizeAdmin) ---
 
-app.get("/admin/users", async (req, res) => {
+app.get("/admin/users", authorizeAdmin, async (req, res) => {
   try {
     const users = await User.find().select("-password")
     res.json(users)
@@ -309,7 +325,7 @@ app.get("/admin/users", async (req, res) => {
   }
 })
 
-app.get("/admin/requests", async (req, res) => {
+app.get("/admin/requests", authorizeAdmin, async (req, res) => {
   try {
     const requests = await SkillRequest.find().sort({ date: -1 })
     res.json(requests)
@@ -318,7 +334,18 @@ app.get("/admin/requests", async (req, res) => {
   }
 })
 
-app.get("/admin/sessions", async (req, res) => {
+// Public accessible requests (for Dashboard) BUT we can protect it too if we want
+// Dashboard needs it. Dashboard has token. So protect it.
+app.get("/active-requests", authenticateToken, async (req, res) => {
+  try {
+    const requests = await SkillRequest.find({ status: "Open" }).sort({ date: -1 }).limit(20)
+    res.json(requests)
+  } catch (err) {
+    res.status(500).json([])
+  }
+})
+
+app.get("/admin/sessions", authorizeAdmin, async (req, res) => {
   try {
     const sessions = await Session.find().sort({ created: -1 })
     res.json(sessions)
@@ -327,23 +354,53 @@ app.get("/admin/sessions", async (req, res) => {
   }
 })
 
-app.get("/peers/leaderboard", async (req, res) => {
+app.delete("/admin/user", authorizeAdmin, async (req, res) => {
   try {
-    // Top 5 users by points
+    const { email } = req.body
+    await User.deleteOne({ email })
+    await SkillRequest.deleteMany({ email })
+    await Session.deleteMany({ $or: [{ scheduler: email }, { peer: email }] })
+    await Notification.deleteMany({ recipient: email })
+    res.json({ status: "ok" })
+  } catch (err) {
+    res.status(500).json({ error: "Failed delete" })
+  }
+})
+
+app.post("/admin/update-points", authorizeAdmin, async (req, res) => {
+  try {
+    const { email, points } = req.body
+    await User.findOneAndUpdate({ email }, { skillPoints: points })
+    res.json({ status: "ok" })
+  } catch (e) { res.status(500).json({ error: "Error" }) }
+})
+
+
+// Notifications
+app.post("/notifications", authenticateToken, async (req, res) => {
+  // Return user notifications
+  try {
+    const { email } = req.body
+    if (email !== req.user.email) return res.json([])
+    const n = await Notification.find({ recipient: email, read: false })
+    res.json(n)
+  } catch (e) { res.json([]) }
+})
+
+app.post("/notifications/mark-read", authenticateToken, async (req, res) => {
+  try {
+    const { ids } = req.body
+    await Notification.updateMany({ _id: { $in: ids } }, { read: true })
+    res.json({ status: "ok" })
+  } catch (e) { res.json({ status: "error" }) }
+})
+
+app.get("/peers/leaderboard", authenticateToken, async (req, res) => {
+  try {
     const leaders = await User.find().sort({ skillPoints: -1 }).limit(5).select("name skillPoints studyYear branch")
     res.json(leaders)
   } catch (err) {
     res.status(500).json([])
-  }
-})
-
-app.delete("/admin/user", async (req, res) => {
-  try {
-    const { email } = req.body
-    await User.deleteOne({ email })
-    res.json({ status: "ok" })
-  } catch (err) {
-    res.status(500).json({ error: "Failed delete" })
   }
 })
 
